@@ -30,10 +30,15 @@ class Tone_Classification():
         return cross_entropy_mean
     def _forward(self, batch_x):
         layers = []
-        layers.append(tfnnutils.FCLayer('FC1', self.input_dim, self.hidden_dim, act = tf.nn.relu)) 
-        layers.append(tfnnutils.FCLayer('FC2', self.hidden_dim, self.hidden_dim, act = tf.nn.relu)) 
-        layers.append(tfnnutils.FCLayer('FC3', self.hidden_dim, self.hidden_dim, act = tf.nn.relu)) 
-        layers.append(tfnnutils.FCLayer('FC4', self.hidden_dim, self.hidden_dim, act = tf.nn.relu)) 
+        for i in xrange(len(args['hidden_dim'])):
+            if i == 0:
+                layers.append(tfnnutils.FCLayer('FC%d' % (i + 1), self.input_dim, self.hidden_dim[i], act = tf.nn.relu))
+            else:
+                layers.append(tfnnutils.FCLayer('FC%d' % (i + 1), self.hidden_dim[i - 1], self.hidden_dim[i], act = tf.nn.relu))
+        #layers.append(tfnnutils.FCLayer('FC1', self.input_dim, self.hidden_dim, act = tf.nn.relu)) 
+        #layers.append(tfnnutils.FCLayer('FC2', self.hidden_dim, self.hidden_dim, act = tf.nn.relu)) 
+        #layers.append(tfnnutils.FCLayer('FC3', self.hidden_dim, self.hidden_dim, act = tf.nn.relu)) 
+        #layers.append(tfnnutils.FCLayer('FC4', self.hidden_dim, self.hidden_dim, act = tf.nn.relu)) 
         #layers.append(tfnnutils.FCLayer('FC5', self.hidden_dim, self.hidden_dim, act = tf.nn.relu)) 
 
         layers.append(tfnnutils.Flatten())
@@ -308,7 +313,7 @@ class Tone_Classification():
         for epoch in xrange(15):
             n_train_batch = 0
             batch_size = args['batch_size']
-            if epoch % 4 == 0:
+            if epoch % 3 == 0:
                 lr /= 2.0 
             print 'The epoch %d training: ' % epoch
             while True:
@@ -330,8 +335,9 @@ if __name__ == "__main__":
 
     args = {}
     args['input_dim'] = 20 
-    args['hidden_dim'] = 60
-    args['batch_size'] = 4 
+    #args['hidden_dim'] = 60
+    args['hidden_dim'] = [60, 40, 40, 20]
+    args['batch_size'] = 4
     model = Tone_Classification(args)
     model.prepared_train_data()
     model.prepared_test_data()
