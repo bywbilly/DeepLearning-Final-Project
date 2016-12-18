@@ -23,11 +23,17 @@ class Tone_Classification():
         self.test_new_y = np.zeros((228, ), np.float32)
         self.output_dim = 4
 
-    def _loss(self, logits, labels):
+    def _loss(self, logits, L2_loss, labels):
+        print "miemiemie"
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
             logits, labels, name='cross_entropy_per_example')
-        cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
+        print args['use_L2']
+        if args['use_L2']:
+            cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy') + 0.005 * L2_loss
+        else:
+            cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
         return cross_entropy_mean
+
     def _forward(self, batch_x):
         layers = []
         for i in xrange(len(args['hidden_dim'])):
@@ -42,12 +48,16 @@ class Tone_Classification():
         #layers.append(tfnnutils.FCLayer('FC5', self.hidden_dim, self.hidden_dim, act = tf.nn.relu)) 
 
         layers.append(tfnnutils.Flatten())
-        for layer in layers:
+
+        L2_loss = 0.
+        for i, layer in enumerate(layers):
+            if i != len(layers) - 1: 
+                L2_loss += layer.L2_Loss
             batch_x = layer.forward(batch_x)
 
         pred = tf.nn.softmax(batch_x)
         
-        return pred, batch_x
+        return pred, batch_x, L2_loss
     
     def build_model(self):
         global_step = tf.get_variable(
@@ -62,8 +72,8 @@ class Tone_Classification():
         x = self._x
         y = self._y
 
-        pred, logits = self._forward(x)
-        loss = self._loss(logits, y)
+        pred, logits, L2_loss = self._forward(x)
+        loss = self._loss(logits, L2_loss, y)
 
         grads = opt.compute_gradients(loss)
 
@@ -334,10 +344,11 @@ class Tone_Classification():
 if __name__ == "__main__":
 
     args = {}
-    args['input_dim'] = 20 
+    args['input_dim'] = 10
     #args['hidden_dim'] = 60
-    args['hidden_dim'] = [60, 40, 40, 20]
+    args['hidden_dim'] = [100, 80, 80]
     args['batch_size'] = 4
+    args['use_L2'] = 1
     model = Tone_Classification(args)
     model.prepared_train_data()
     model.prepared_test_data()
