@@ -5,6 +5,8 @@ import copy
 import itertools
 import os
 import sys
+import time
+import multiprocessing
 import data_process
 from pprint import pprint
 
@@ -199,7 +201,28 @@ def run_single():
         print '\033[7mhung... auto restart...\033[0m'
 
 
-def run_grid_search():
+def _grid_search_init():
+    global alldata, best_err
+    alldata = data_process.read_all()
+    best_err = 1e2
+
+def _grid_search_worker(args):
+    global alldata, best_err
+    err, path = 1e2, None
+    for i in xrange(3):
+        data = copy.deepcopy(alldata)
+        tf.reset_default_graph()
+        model = Tone_Classification(data, args, verbose=False)
+        model.build_model()
+        model.train(stop_if_hang=False)
+        now_err = model.evaluate('test_new')
+        err = min(err, now_err)
+        if now_err < best_err:
+            best_err = now_err
+            path = model.save('../out/%.6f' % err)
+    return err, path
+
+def run_grid_search(num_worker):
     g_input_dim = [8, 12, 30]
     g_dims = [2, 3]
     g_dim_size = [10, 20, 40, 80]
@@ -208,14 +231,12 @@ def run_grid_search():
     g_lr = [0.0008, 0.0016, 0.0064]
     g_l2 = [0, 0.005]
 
-    alldata = data_process.read_all()
-    best_err = 1e2
+    tasks = []
     for input_dim, dims, batch_size, optimizer, lr, l2 in itertools.product(g_input_dim, g_dims, g_batch_size, g_optimizer, g_lr, g_l2):
         for hidden_dim in itertools.product(*itertools.repeat(g_dim_size, dims)):
-            hidden_dim = list(hidden_dim)
-            args = {
+            tasks.append({
                 'input_dim': input_dim,
-                'hidden_dim': hidden_dim,
+                'hidden_dim': list(hidden_dim),
                 'batch_size': batch_size,
                 'optimizer': optimizer,
                 'init_lr': lr,
@@ -223,25 +244,32 @@ def run_grid_search():
                 'use_L1': False,
                 'L2_reg': l2,
                 'L1_reg': .0
-            }
-            err = 1e2
-            for i in xrange(3):
-                data = copy.deepcopy(alldata)
-                tf.reset_default_graph()
-                model = Tone_Classification(data, args, verbose=False)
-                model.build_model()
-                model.train(stop_if_hang=False)
-                now_err = model.evaluate('test_new')
-                err = min(err, now_err)
-                if now_err < best_err:
-                    best_err = now_err
-                    path = model.save('../out/%.6f' % err)
-                    print 'new best!', 'err', err, 'saved at ', path
+            })
+
+    pool = multiprocessing.Pool(processes=num_worker, initializer=_grid_search_init)
+    best = 1e2
+    st = time.time()
+    try:
+        for done, (err, path) in enumerate(pool.imap_unordered(_grid_search_worker, tasks), start=1):
+            dur = time.time() - st
+            rhh, rmm, rss = dur // 3600, dur // 60 % 60, dur % 60
+            dur = (len(tasks) - done) * dur / done
+            ehh, emm, ess = dur // 3600, dur // 60 % 60, dur % 60
+            sys.stderr.write('done %d/%d   %dh%02dm%02ds elapsed   %dh%02dm%02ds eta\n' % (done, len(tasks), rhh, rmm, rss, ehh, emm, ess))
+            sys.stderr.flush()
+            if err < best:
+                best = err
+                print 'new best!', 'err', err, 'saved at ', path
             print 'err', err, 'input_dim', input_dim, 'hidden_dim', hidden_dim, 'batch_size', batch_size, 'optimizer', optimizer, 'init_lr', lr, 'L2_reg', l2
+            sys.stdout.flush()
+    except KeyboardInterrupt:
+        pool.terminate()
+        pool.join()
+        raise
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == 'grid':
-        run_grid_search()
+        run_grid_search(int(sys.argv[2]))
     else:
         run_single()
