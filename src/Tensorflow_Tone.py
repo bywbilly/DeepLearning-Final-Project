@@ -6,9 +6,12 @@ import sys
 #train_data = '/Users/bywbilly/DeepLearning/Final Project/toneclassifier/train_intergrate_'
 #test_data = '/Users/bywbilly/DeepLearning/Final Project/toneclassifier/test_intergrate_'
 #test_new_data = '/Users/bywbilly/DeepLearning/Final Project/toneclassifier/test_new_intergrate_'
-train_data = '/Users/bywbilly/DeepLearning/Final Project/toneclassifier/train_intergrate_nozero_'
-test_data = '/Users/bywbilly/DeepLearning/Final Project/toneclassifier/test_intergrate_nozero_'
-test_new_data = '/Users/bywbilly/DeepLearning/Final Project/toneclassifier/test_new_intergrate_nozero_'
+#train_data = '/Users/bywbilly/DeepLearning/Final Project/toneclassifier/train_intergrate_nozero_'
+#test_data = '/Users/bywbilly/DeepLearning/Final Project/toneclassifier/test_intergrate_nozero_'
+#test_new_data = '/Users/bywbilly/DeepLearning/Final Project/toneclassifier/test_new_intergrate_nozero_'
+train_data = '/Users/bywbilly/DeepLearning/DeepLearning-Final-Project/toneclassifier/train_intergrate_nosmall_'
+test_data = '/Users/bywbilly/DeepLearning/DeepLearning-Final-Project/toneclassifier/test_intergrate_nosmall_'
+test_new_data = '/Users/bywbilly/DeepLearning/DeepLearning-Final-Project/toneclassifier/test_new_intergrate_nosmall_'
 
 class Tone_Classification():
     def __init__(self, args):
@@ -23,13 +26,13 @@ class Tone_Classification():
         self.test_new_y = np.zeros((228, ), np.float32)
         self.output_dim = 4
 
-    def _loss(self, logits, L2_loss, labels):
-        print "miemiemie"
+    def _loss(self, logits, L1_loss, L2_loss, labels):
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
             logits, labels, name='cross_entropy_per_example')
-        print args['use_L2']
         if args['use_L2']:
-            cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy') + 0.005 * L2_loss
+            cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy') + args['L2_reg'] * L2_loss
+        elif args['use_L1']:
+            cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy') + args['L1_reg'] * L1_loss
         else:
             cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
         return cross_entropy_mean
@@ -41,23 +44,28 @@ class Tone_Classification():
                 layers.append(tfnnutils.FCLayer('FC%d' % (i + 1), self.input_dim, self.hidden_dim[i], act = tf.nn.relu))
             else:
                 layers.append(tfnnutils.FCLayer('FC%d' % (i + 1), self.hidden_dim[i - 1], self.hidden_dim[i], act = tf.nn.relu))
+        #layers.append(tfnnutils.FCLayer('FCC', self.hidden_dim[len(self.hidden_dim) - 1], self.output_dim, act = tf.nn.relu))
         #layers.append(tfnnutils.FCLayer('FC1', self.input_dim, self.hidden_dim, act = tf.nn.relu)) 
         #layers.append(tfnnutils.FCLayer('FC2', self.hidden_dim, self.hidden_dim, act = tf.nn.relu)) 
         #layers.append(tfnnutils.FCLayer('FC3', self.hidden_dim, self.hidden_dim, act = tf.nn.relu)) 
         #layers.append(tfnnutils.FCLayer('FC4', self.hidden_dim, self.hidden_dim, act = tf.nn.relu)) 
         #layers.append(tfnnutils.FCLayer('FC5', self.hidden_dim, self.hidden_dim, act = tf.nn.relu)) 
 
-        layers.append(tfnnutils.Flatten())
+        #layers.append(tfnnutils.Flatten())
 
-        L2_loss = 0.
+        L1_loss, L2_loss = 0., 0.
+        #print batch_x
         for i, layer in enumerate(layers):
-            if i != len(layers) - 1: 
-                L2_loss += layer.L2_Loss
+            #if i != len(layers) - 1: 
+            #    L2_loss += layer.L2_Loss
+            #    L1_loss += layer.L1_Loss
             batch_x = layer.forward(batch_x)
-
-        pred = tf.nn.softmax(batch_x)
+            #print batch_x
         
-        return pred, batch_x, L2_loss
+        pred = tf.nn.softmax(batch_x)
+        #print pred 
+        
+        return pred, batch_x, L1_loss, L2_loss
     
     def build_model(self):
         global_step = tf.get_variable(
@@ -67,13 +75,14 @@ class Tone_Classification():
         #opt = tf.train.MomentumOptimizer(learning_rate = self.lr, momentum = 0.9)
         #opt = tf.train.GradientDescentOptimizer(learning_rate = self.lr)
         opt = tf.train.AdamOptimizer(learning_rate = self.lr)
+        #opt = tf.train.AdagradOptimizer(learning_rate = self.lr)
         self._x = tf.placeholder(tf.float32, shape = [self.batch_size, self.input_dim])
         self._y = tf.placeholder(tf.int64)
         x = self._x
         y = self._y
 
-        pred, logits, L2_loss = self._forward(x)
-        loss = self._loss(logits, L2_loss, y)
+        pred, logits, L1_loss, L2_loss = self._forward(x)
+        loss = self._loss(logits, L1_loss, L2_loss, y)
 
         grads = opt.compute_gradients(loss)
 
@@ -290,6 +299,7 @@ class Tone_Classification():
             total_loss += np.mean(loss)
             for i in range(len(preds)):
                 if np.argmax(preds[i]) != prepared_y[i]:
+                    #print preds[i]
                     total_err += 1
             n_batch += 1
         print 'loss = %f err = %f' % (total_loss / n_batch, total_err / (n_batch * batch_size))
@@ -320,10 +330,10 @@ class Tone_Classification():
     def train(self, batch_x, batch_y):
         lr = 0.001
 
-        for epoch in xrange(15):
+        for epoch in xrange(20):
             n_train_batch = 0
             batch_size = args['batch_size']
-            if epoch % 3 == 0:
+            if epoch % 4 == 0:
                 lr /= 2.0 
             print 'The epoch %d training: ' % epoch
             while True:
@@ -344,11 +354,14 @@ class Tone_Classification():
 if __name__ == "__main__":
 
     args = {}
-    args['input_dim'] = 10
+    args['input_dim'] = 20 
     #args['hidden_dim'] = 60
     args['hidden_dim'] = [100, 80, 80]
     args['batch_size'] = 4
-    args['use_L2'] = 1
+    args['use_L2'] = 0 
+    args['use_L1'] = 0 
+    args['L1_reg'] = 0.0005
+    args['L2_reg'] = 0.005
     model = Tone_Classification(args)
     model.prepared_train_data()
     model.prepared_test_data()
