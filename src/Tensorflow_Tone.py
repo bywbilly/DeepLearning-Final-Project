@@ -139,7 +139,7 @@ class Tone_Classification():
         print >> self.out, 'evaluate %s: loss = %f err = \033[1;31m%f\033[0m' % (dataset, loss, err)
         return err
 
-    def train(self):
+    def train(self, stop_if_hang=True):
         lr = self.args['init_lr']
         last_err = 100
         cnt_hang = 0
@@ -162,7 +162,7 @@ class Tone_Classification():
                     err = self.evaluate('test')
                     if abs(err - last_err) < 1e-3:
                         cnt_hang += 1
-                        if cnt_hang >= 4:
+                        if cnt_hang >= 4 and stop_if_hang:
                             return False
                     else:
                         cnt_hang = 0
@@ -200,12 +200,12 @@ def run_single():
 
 
 def run_grid_search():
-    g_input_dim = [8, 12, 30, 42, 60]
-    g_dims = [1, 2, 3]
-    g_dim_size = [10, 20, 40, 80, 160]
-    g_batch_size = [1, 2, 4, 8, 16]
+    g_input_dim = [8, 12, 30]
+    g_dims = [2, 3]
+    g_dim_size = [10, 20, 40, 80]
+    g_batch_size = [1, 2, 4, 8]
     g_optimizer = ['sgd', 'adam']
-    g_lr = [0.0008, 0.0016, 0.0064, 0.016]
+    g_lr = [0.0008, 0.0016, 0.0064]
     g_l2 = [0, 0.005]
 
     alldata = data_process.read_all()
@@ -224,20 +224,19 @@ def run_grid_search():
                 'L2_reg': l2,
                 'L1_reg': .0
             }
-            data = copy.deepcopy(alldata)
-            tf.reset_default_graph()
-            model = Tone_Classification(data, args, verbose=False)
-            model.build_model()
-            ok = False
-            for i in xrange(5):
-                ok = model.train()
-                if ok:
-                    break
-            err = model.evaluate('test_new')
-            if err < best_err:
-                best_err = err
-                path = model.save('../out/%.6f' % err)
-                print 'new best!', 'err', err, 'saved at ', path
+            err = 1e2
+            for i in xrange(3):
+                data = copy.deepcopy(alldata)
+                tf.reset_default_graph()
+                model = Tone_Classification(data, args, verbose=False)
+                model.build_model()
+                model.train(stop_if_hang=False)
+                now_err = model.evaluate('test_new')
+                err = min(err, now_err)
+                if now_err < best_err:
+                    best_err = now_err
+                    path = model.save('../out/%.6f' % err)
+                    print 'new best!', 'err', err, 'saved at ', path
             print 'err', err, 'input_dim', input_dim, 'hidden_dim', hidden_dim, 'batch_size', batch_size, 'optimizer', optimizer, 'init_lr', lr, 'L2_reg', l2
 
 
