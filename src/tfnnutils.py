@@ -20,6 +20,8 @@ class FCLayer(object):
         self.b = _variable_on_cpu('%s-b' % layer_name, [n_out],
                                   #tf.random_uniform_initializer(minval=-0.05,maxval=0.05, dtype=tf.float32))
                                   tf.constant_initializer(0.1, dtype=tf.float32))
+        self.L2_Loss = tf.nn.l2_loss(self.W)
+        self.L1_Loss = tf.reduce_sum(tf.abs(self.W))
 
     def forward(self, x):
         if self.act is None:
