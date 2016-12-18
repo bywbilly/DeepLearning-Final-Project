@@ -1,6 +1,4 @@
 import numpy as np
-import tensorflow as tf
-import tfnnutils
 import copy
 import itertools
 import os
@@ -89,9 +87,10 @@ class Tone_Classification():
 
         init = tf.global_variables_initializer()
 
-        self.sess = tf.Session(config=tf.ConfigProto(
-            allow_soft_placement=True,
-            log_device_placement=False))
+        config = tf.ConfigProto(allow_soft_placement=True,
+                                log_device_placement=False)
+        config.gpu_options.allow_growth=True
+        self.sess = tf.Session(config=config)
 
         self.sess.run(init)
         tf.train.start_queue_runners(sess=self.sess)
@@ -182,6 +181,9 @@ class Tone_Classification():
 
 
 def run_single():
+    global tf, tfnnutils
+    import tensorflow as tf
+    import tfnnutils
     args = {
         'input_dim': 12,
         'hidden_dim': [12, 12, 4],
@@ -197,12 +199,14 @@ def run_single():
     model = Tone_Classification(data, args)
     model.build_model()
     while not model.train():
-        model.sess.run(tf.initialize_all_variables())
+        model.sess.run(tf.global_variables_initializer())
         print '\033[7mhung... auto restart...\033[0m'
 
 
 def _grid_search_init():
-    global alldata, best_err
+    global alldata, best_err, tf, tfnnutils
+    import tensorflow as tf
+    import tfnnutils
     alldata = data_process.read_all()
     best_err = 1e2
 
