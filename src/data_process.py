@@ -30,7 +30,7 @@ def read_all():
         os.path.walk(dirname, _read_dataset, dataset)
         return dataset
 
-    base_dir = os.path.realpath('../toneclassifier')
+    base_dir = '../toneclassifier'
     return {
         'test': _read_one(os.path.join(base_dir, 'test')),
         'test_new': _read_one(os.path.join(base_dir, 'test_new')),

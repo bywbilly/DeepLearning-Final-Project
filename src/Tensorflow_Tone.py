@@ -1,16 +1,20 @@
 import numpy as np
 import tensorflow as tf
 import tfnnutils
+import copy
+import itertools
+import os
 import sys
 import data_process
 from pprint import pprint
 
 class Tone_Classification():
-    def __init__(self, data, args):
+    def __init__(self, data, args, verbose=True):
         self.input_dim = args['input_dim']
         self.hidden_dim = args['hidden_dim']
         self.batch_size = args['batch_size']
-        self.init_lr = args['init_lr']
+        self.args = args
+        self.out = sys.stdout if verbose else open(os.devnull, 'w')
         data_process.shuffle(data)
         data_process.strip_zeros(data, 0.05)
         data_process.fix_length(data, self.input_dim//2, np.max)
@@ -22,22 +26,22 @@ class Tone_Classification():
                 ys.append(datum.tone)
             self.data_xs[k] = np.array(xs, np.float32)
             self.data_ys[k] = np.array(ys, np.int32) - 1
-            print self.data_xs[k].shape, self.data_ys[k].shape
+            print >> self.out, self.data_xs[k].shape, self.data_ys[k].shape
 
     def _loss(self, logits, L1_loss, L2_loss, labels):
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
             logits, labels, name='cross_entropy_per_example')
         cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
-        if args['use_L2']:
-            cross_entropy_mean += args['L2_reg'] * L2_loss
-        elif args['use_L1']:
-            cross_entropy_mean += args['L1_reg'] * L1_loss
+        if self.args['use_L2']:
+            cross_entropy_mean += self.args['L2_reg'] * L2_loss
+        elif self.args['use_L1']:
+            cross_entropy_mean += self.args['L1_reg'] * L1_loss
         return cross_entropy_mean
 
     def _forward(self, batch_x):
         layers = []
         dims = [self.input_dim] + self.hidden_dim
-        for i in xrange(len(args['hidden_dim'])):
+        for i in xrange(len(self.hidden_dim)):
             layers.append(tfnnutils.FCLayer('FC%d'%(i+1), dims[i], dims[i+1], act=tf.nn.relu))
 
         L1_loss, L2_loss = 0., 0.
@@ -47,10 +51,10 @@ class Tone_Classification():
             elif hasattr(layer, 'L1_Loss'):
                 L1_loss += layer.L1_Loss
             batch_x = layer.forward(batch_x)
-            #print batch_x
+            #print >> self.out, batch_x
         
         pred = tf.nn.softmax(batch_x)
-        #print pred
+        #print >> self.out, pred
         
         return pred, batch_x, L1_loss, L2_loss
     
@@ -59,10 +63,16 @@ class Tone_Classification():
             'global_step', [],
             initializer=tf.constant_initializer(0), trainable=False)
         self.lr = tf.placeholder(tf.float32, shape=[])
-        #opt = tf.train.MomentumOptimizer(learning_rate = self.lr, momentum = 0.9)
-        opt = tf.train.GradientDescentOptimizer(learning_rate=self.lr)
-        # opt = tf.train.AdamOptimizer(learning_rate=self.lr)
-        #opt = tf.train.AdagradOptimizer(learning_rate = self.lr)
+        if self.args['optimizer'] == 'sgd':
+            opt = tf.train.GradientDescentOptimizer(learning_rate=self.lr)
+        elif self.args['optimizer'] == 'momentum':
+            opt = tf.train.MomentumOptimizer(learning_rate=self.lr, momentum=0.9)
+        elif self.args['optimizer'] == 'adam':
+            opt = tf.train.AdamOptimizer(learning_rate=self.lr)
+        elif self.args['optimizer'] == 'adagrad':
+            opt = tf.train.AdagradOptimizer(learning_rate=self.lr)
+        else:
+            raise RuntimeError('unsupported optimizer %s' % self.args['optimizer'])
         self._x = tf.placeholder(tf.float32, shape=[self.batch_size, self.input_dim])
         self._y = tf.placeholder(tf.int32)
         x = self._x
@@ -106,14 +116,14 @@ class Tone_Classification():
         return ret_x, ret_y
 
     def evaluate(self, dataset):
-        batch_size = args['batch_size']
+        batch_size = self.batch_size
         total_loss = 0.
         total_err = 0.
         n_batch = 0
         now_pos = 0
         while True:
             prepared_x, prepared_y = self.get_batch(dataset, n_batch)
-            #print prepared_x, prepared_y
+            #print >> self.out, prepared_x, prepared_y
             if prepared_x is None:
                 break
             feed = {self._x: prepared_x, self._y: prepared_y}
@@ -121,33 +131,33 @@ class Tone_Classification():
             total_loss += np.mean(loss)
             for i in range(len(preds)):
                 if np.argmax(preds[i]) != prepared_y[i]:
-                    # print 'preds[i] =', preds[i], 'prepared_y[i] =', prepared_y[i]
+                    # print >> self.out, 'preds[i] =', preds[i], 'prepared_y[i] =', prepared_y[i]
                     total_err += 1
             n_batch += 1
         loss = total_loss / n_batch
         err = total_err / (n_batch * batch_size)
-        print 'evaluate %s: loss = %f err = \033[1;31m%f\033[0m' % (dataset, loss, err)
+        print >> self.out, 'evaluate %s: loss = %f err = \033[1;31m%f\033[0m' % (dataset, loss, err)
         return err
 
-    def train(self, batch_x, batch_y):
-        lr = self.init_lr
+    def train(self):
+        lr = self.args['init_lr']
         last_err = 100
         cnt_hang = 0
         for epoch in xrange(20):
             n_train_batch = 0
-            batch_size = args['batch_size']
+            batch_size = self.args['batch_size']
             if epoch % 4 == 0:
                 lr /= 2.0 
-            print '\033[1;36mThe epoch %d training: \033[0m' % epoch
+            print >> self.out, '\033[1;36mThe epoch %d training: \033[0m' % epoch
             while True:
                 prepared_x, prepared_y = self.get_batch('train', n_train_batch)
                 if prepared_x is None:
                     break
-                # print prepared_y
+                # print >> self.out, prepared_y
                 feed = {self.lr: lr, self._x: prepared_x, self._y: prepared_y}
                 _, loss = self.sess.run([self.train_step, self.loss_step], feed_dict=feed)
                 if n_train_batch % 100 == 0:
-                    print 'The iteration is %d train loss is: %f' % (n_train_batch, loss)
+                    print >> self.out, 'The iteration is %d train loss is: %f' % (n_train_batch, loss)
                 if n_train_batch % 200 == 0:
                     err = self.evaluate('test')
                     if abs(err - last_err) < 1e-3:
@@ -158,15 +168,23 @@ class Tone_Classification():
                         cnt_hang = 0
                         last_err = err
                 n_train_batch += 1
-            self.evaluate('test_new')
         return True
 
+    def save(self, dirname):
+        try:
+            os.makedirs(dirname)
+        except:
+            pass
+        saver = tf.train.Saver()
+        return saver.save(self.sess, os.path.join(dirname, "model.ckpt"))
 
-if __name__ == "__main__":
+
+def run_single():
     args = {
         'input_dim': 12,
         'hidden_dim': [12, 12, 4],
         'batch_size': 2,
+        'optimizer': 'sgd',
         'init_lr': 0.0016,
         'use_L2': True,
         'use_L1': False,
@@ -176,6 +194,55 @@ if __name__ == "__main__":
     data = data_process.read_all()
     model = Tone_Classification(data, args)
     model.build_model()
-    while not model.train(None, None):
+    while not model.train():
         model.sess.run(tf.initialize_all_variables())
         print '\033[7mhung... auto restart...\033[0m'
+
+
+def run_grid_search():
+    g_input_dim = [8, 12, 30, 42, 60]
+    g_dims = [1, 2, 3]
+    g_dim_size = [10, 20, 40, 80, 160]
+    g_batch_size = [1, 2, 4, 8, 16]
+    g_optimizer = ['sgd', 'adam']
+    g_lr = [0.0008, 0.0016, 0.0064, 0.016]
+    g_l2 = [0, 0.005]
+
+    alldata = data_process.read_all()
+    best_err = 1e2
+    for input_dim, dims, batch_size, optimizer, lr, l2 in itertools.product(g_input_dim, g_dims, g_batch_size, g_optimizer, g_lr, g_l2):
+        for hidden_dim in itertools.product(*itertools.repeat(g_dim_size, dims)):
+            hidden_dim = list(hidden_dim)
+            args = {
+                'input_dim': input_dim,
+                'hidden_dim': hidden_dim,
+                'batch_size': batch_size,
+                'optimizer': optimizer,
+                'init_lr': lr,
+                'use_L2': bool(l2),
+                'use_L1': False,
+                'L2_reg': l2,
+                'L1_reg': .0
+            }
+            data = copy.deepcopy(alldata)
+            tf.reset_default_graph()
+            model = Tone_Classification(data, args, verbose=False)
+            model.build_model()
+            ok = False
+            for i in xrange(5):
+                ok = model.train()
+                if ok:
+                    break
+            err = model.evaluate('test_new')
+            if err < best_err:
+                best_err = err
+                path = model.save('../out/%.6f' % err)
+                print 'new best!', 'err', err, 'saved at ', path
+            print 'err', err, 'input_dim', input_dim, 'hidden_dim', hidden_dim, 'batch_size', batch_size, 'optimizer', optimizer, 'init_lr', lr, 'L2_reg', l2
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == 'grid':
+        run_grid_search()
+    else:
+        run_single()
