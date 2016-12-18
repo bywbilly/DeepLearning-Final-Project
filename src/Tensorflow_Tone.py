@@ -224,7 +224,7 @@ def _grid_search_worker(args):
         if now_err < best_err:
             best_err = now_err
             path = model.save('../out/%.6f' % err)
-    return err, path
+    return args, err, path
 
 def run_grid_search(num_worker):
     g_input_dim = [8, 12, 30]
@@ -254,7 +254,7 @@ def run_grid_search(num_worker):
     best = 1e2
     st = time.time()
     try:
-        for done, (err, path) in enumerate(pool.imap_unordered(_grid_search_worker, tasks), start=1):
+        for done, (args, err, path) in enumerate(pool.imap_unordered(_grid_search_worker, tasks), start=1):
             dur = time.time() - st
             rhh, rmm, rss = dur // 3600, dur // 60 % 60, dur % 60
             dur = (len(tasks) - done) * dur / done
@@ -264,7 +264,11 @@ def run_grid_search(num_worker):
             if err < best:
                 best = err
                 print 'new best!', 'err', err, 'saved at ', path
-            print 'err', err, 'input_dim', input_dim, 'hidden_dim', hidden_dim, 'batch_size', batch_size, 'optimizer', optimizer, 'init_lr', lr, 'L2_reg', l2
+            str = ['err', repr(err)]
+            for k in sorted(args.iterkeys()):
+                str.append(k)
+                str.append(repr(args[k]))
+            print ' '.join(str)
             sys.stdout.flush()
     except KeyboardInterrupt:
         pool.terminate()
