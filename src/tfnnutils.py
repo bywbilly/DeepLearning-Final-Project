@@ -2,9 +2,8 @@ import tensorflow as tf
 import numpy
 
 
-def _variable_on_cpu(name, shape, initializer):
-    with tf.device('/cpu:0'):
-        var = tf.get_variable(name, shape, initializer=initializer, dtype=tf.float32)
+def _variable(name, shape, initializer):
+    var = tf.get_variable(name, shape, initializer=initializer, dtype=tf.float32)
     return var
 
 
@@ -15,11 +14,11 @@ class FCLayer(object):
         self.act = act
         self.has_bias = has_bias
 
-        self.W = _variable_on_cpu('%s-W' % layer_name, [n_in, n_out],
-                                  tf.random_uniform_initializer(minval=-0.05,maxval=0.05, dtype=tf.float32))
-        self.b = _variable_on_cpu('%s-b' % layer_name, [n_out],
-                                  #tf.random_uniform_initializer(minval=-0.05,maxval=0.05, dtype=tf.float32))
-                                  tf.constant_initializer(0.1, dtype=tf.float32))
+        self.W = _variable('%s-W' % layer_name, [n_in, n_out],
+                           tf.random_uniform_initializer(minval=-0.05,maxval=0.05, dtype=tf.float32))
+        self.b = _variable('%s-b' % layer_name, [n_out],
+                           # tf.random_uniform_initializer(minval=-0.05,maxval=0.05, dtype=tf.float32))
+                           tf.constant_initializer(0.1, dtype=tf.float32))
         self.L2_Loss = tf.nn.l2_loss(self.W)
         self.L1_Loss = tf.reduce_sum(tf.abs(self.W))
 
@@ -36,11 +35,11 @@ class Conv2D(object):
         self.strides = strides
         self.padding = padding
 
-        self.W = _variable_on_cpu('%s-W' % layer_name, self.filter_shape,
-                                  tf.random_uniform_initializer(minval=-0.05,maxval=0.05, dtype=tf.float32))
-        self.b = _variable_on_cpu('%s-b' % layer_name, [self.filter_shape[3]],
-                                  tf.random_uniform_initializer(minval=-0.05,maxval=0.05, dtype=tf.float32))
-                                  #tf.constant_initializer(0.01, dtype=tf.float32))
+        self.W = _variable('%s-W' % layer_name, self.filter_shape,
+                           tf.random_uniform_initializer(minval=-0.05,maxval=0.05, dtype=tf.float32))
+        self.b = _variable('%s-b' % layer_name, [self.filter_shape[3]],
+                           tf.random_uniform_initializer(minval=-0.05,maxval=0.05, dtype=tf.float32))
+                           # tf.constant_initializer(0.01, dtype=tf.float32))
 
     def forward(self, x):
         out = tf.nn.conv2d(input=x, filter=self.W, strides=(1, 1, 1, 1), padding=self.padding)

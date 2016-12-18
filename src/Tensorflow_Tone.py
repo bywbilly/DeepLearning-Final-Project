@@ -85,7 +85,7 @@ class Tone_Classification():
 
         apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
 
-        init = tf.initialize_all_variables()
+        init = tf.global_variables_initializer()
 
         self.sess = tf.Session(config=tf.ConfigProto(
             allow_soft_placement=True,
