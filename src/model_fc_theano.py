@@ -6,6 +6,7 @@ import sys
 import time
 import multiprocessing
 import data_process
+import cPickle
 from pprint import pprint
 
 class Tone_Classification():
@@ -28,80 +29,67 @@ class Tone_Classification():
             self.data_ys[k] = np.array(ys, np.int32) - 1
             print >> self.out, self.data_xs[k].shape, self.data_ys[k].shape
 
-    def _loss(self, logits, L1_loss, L2_loss, labels):
-        cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits, labels, name='cross_entropy_per_example')
-        cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
-        if self.args['use_L2']:
-            cross_entropy_mean += self.args['L2_reg'] * L2_loss
-        elif self.args['use_L1']:
-            cross_entropy_mean += self.args['L1_reg'] * L1_loss
-        return cross_entropy_mean
+    def get_params(self, layers):
+        params = []
+        for l in layers:
+            if l.params != None:
+                params.append(l.params)
+        return params
 
-    def _forward(self, batch_x):
-        layers = []
+    def set_params(self, layers, params):
+        k = 0
+        for l in layers:
+            if l.params != None:
+                l.params = params[k]
+                k += 1
+
+    def flatten(self, x):
+        out = []
+        for p in x:
+            for y in p:
+                out.append(y)
+        return out
+
+    def build_model(self, init_params=None):
+        x = self.x = T.matrix()
+        y = self.y = T.ivector()
+        self.layers = layers = []
         dims = [self.input_dim] + self.hidden_dim
         for i in xrange(len(self.hidden_dim)):
-            layers.append(tfnnutils.FCLayer('FC%d'%(i+1), dims[i], dims[i+1], act=tf.nn.relu))
+            layers.append(nnutils.FCLayer(dims[i], dims[i+1], act=nnutils.ReLU))
 
+        if init_params is not None:
+            self.set_params(layers, init_params)
         L1_loss, L2_loss = 0., 0.
+        h = x
         for layer in layers:
             if hasattr(layer, 'L2_Loss'):
                 L2_loss += layer.L2_Loss
             elif hasattr(layer, 'L1_Loss'):
                 L1_loss += layer.L1_Loss
-            batch_x = layer.forward(batch_x)
-            #print >> self.out, batch_x
-        
-        pred = tf.nn.softmax(batch_x)
-        #print >> self.out, pred
-        
-        return pred, batch_x, L1_loss, L2_loss
-    
-    def build_model(self):
-        global_step = tf.get_variable(
-            'global_step', [],
-            initializer=tf.constant_initializer(0), trainable=False)
-        self.lr = tf.placeholder(tf.float32, shape=[])
-        if self.args['optimizer'] == 'sgd':
-            opt = tf.train.GradientDescentOptimizer(learning_rate=self.lr)
-        elif self.args['optimizer'] == 'momentum':
-            opt = tf.train.MomentumOptimizer(learning_rate=self.lr, momentum=0.9)
-        elif self.args['optimizer'] == 'adam':
-            opt = tf.train.AdamOptimizer(learning_rate=self.lr)
-        elif self.args['optimizer'] == 'adagrad':
-            opt = tf.train.AdagradOptimizer(learning_rate=self.lr)
-        else:
-            raise RuntimeError('unsupported optimizer %s' % self.args['optimizer'])
-        self._x = tf.placeholder(tf.float32, shape=[self.batch_size, self.input_dim])
-        self._y = tf.placeholder(tf.int32)
-        x = self._x
-        y = self._y
+            h = layer.forward(h)
+        probs = self.probs = T.nnet.softmax(h)
+        preds = self.preds = probs
+        self.loss = -T.mean(T.log(probs[T.arange(y.shape[0]), y]))
+        if self.args['use_L2']:
+            self.loss += self.args['L2_reg'] * L2_loss
+        elif self.args['use_L1']:
+            self.loss += self.args['L1_reg'] * L1_loss
 
-        pred, logits, L1_loss, L2_loss = self._forward(x)
-        loss = self._loss(logits, L1_loss, L2_loss, y)
-
-        grads = opt.compute_gradients(loss)
-
-        apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
-
-        init = tf.global_variables_initializer()
-
-        config = tf.ConfigProto(allow_soft_placement=True,
-                                log_device_placement=False)
-        config.gpu_options.allow_growth=True
-        self.sess = tf.Session(config=config)
-
-        self.sess.run(init)
-        tf.train.start_queue_runners(sess=self.sess)
-
-        self.train_step = apply_gradient_op
-        self.pred_step = pred
-        self.loss_step = loss
-
-    def predict(self, batch_x):
-        feed = {self._x: batch_x}
-        return self.sess.run(self.pred_step, feed_dict=feed)
+        self.lr = T.scalar()
+        self.lparams = self.get_params(self.layers)
+        self.params = self.flatten(self.lparams)
+        grads = T.grad(self.loss, self.params)
+        updates = [(param_i, param_i - self.lr * grad_i) for param_i, grad_i in zip(self.params, grads)]
+        self.train_func = theano.function(
+            inputs = [self.x, self.y, self.lr],
+            outputs = [self.loss],
+            updates = updates
+        )
+        self.eval_func = theano.function(
+            inputs = [self.x, self.y],
+            outputs = [self.preds, self.loss]
+        )
 
     def get_batch(self, dataset, index):
         data_xs = self.data_xs[dataset]
@@ -127,8 +115,7 @@ class Tone_Classification():
             #print >> self.out, prepared_x, prepared_y
             if prepared_x is None:
                 break
-            feed = {self._x: prepared_x, self._y: prepared_y}
-            loss, preds = self.sess.run([self.loss_step, self.pred_step], feed_dict=feed)
+            preds, loss = self.eval_func(prepared_x, prepared_y)
             total_loss += np.mean(loss)
             for i in range(len(preds)):
                 if np.argmax(preds[i]) != prepared_y[i]:
@@ -142,6 +129,7 @@ class Tone_Classification():
 
     def train(self, stop_if_hang=True):
         lr = self.args['init_lr']
+
         last_err = 100
         cnt_hang = 0
         for epoch in xrange(20):
@@ -155,10 +143,11 @@ class Tone_Classification():
                 if prepared_x is None:
                     break
                 # print >> self.out, prepared_y
-                feed = {self.lr: lr, self._x: prepared_x, self._y: prepared_y}
-                _, loss = self.sess.run([self.train_step, self.loss_step], feed_dict=feed)
+                loss, = self.train_func(prepared_x, prepared_y, lr)
                 if n_train_batch % 100 == 0:
                     print >> self.out, 'The iteration is %d train loss is: %f' % (n_train_batch, loss)
+                    # for param in self.params:
+                    #     print >> self.out, param.get_value()
                 if n_train_batch % 200 == 0:
                     err = self.evaluate('test')
                     if abs(err - last_err) < 1e-3:
@@ -172,18 +161,15 @@ class Tone_Classification():
         return True
 
     def save(self, dirname):
-        try:
-            os.makedirs(dirname)
-        except:
-            pass
-        saver = tf.train.Saver()
-        return saver.save(self.sess, os.path.join(dirname, "model.ckpt"))
+        with open(os.path.join(dirname, 'model.bin'), 'w') as f:
+            cPickle.dump(self.lparams, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 def run_single():
-    global tf, tfnnutils
-    import tensorflow as tf
-    import tfnnutils
+    global theano, T, nnutils
+    import theano
+    import theano.tensor as T
+    import nnutils_theano as nnutils
     args = {
         'input_dim': 12,
         'hidden_dim': [12, 12, 4],
@@ -199,14 +185,18 @@ def run_single():
     model = Tone_Classification(data, args)
     model.build_model()
     while not model.train():
-        model.sess.run(tf.global_variables_initializer())
+        for layer in model.layers:
+            layer.initialize()
         print '\033[7mhung... auto restart...\033[0m'
+    model.evaluate('test_new')
 
 
 def _grid_search_init():
-    global alldata, best_err, tf, tfnnutils
-    import tensorflow as tf
-    import tfnnutils
+    global alldata, best_err
+    global theano, T, nnutils
+    import theano
+    import theano.tensor as T
+    import nnutils_theano as nnutils
     alldata = data_process.read_all()
     best_err = 1e2
 
