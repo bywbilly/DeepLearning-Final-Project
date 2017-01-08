@@ -3,7 +3,10 @@ import os
 import numpy as np
 import collections
 
-Datum = collections.namedtuple('Datum', ['engy', 'f0', 'length', 'pinyin', 'tone'])
+Datum = collections.namedtuple('Datum', [
+    'engy', 'f0',
+    'slope_num', 'slope_engy', 'slope_f0',
+    'length', 'pinyin', 'tone'])
 
 
 def read_all():
@@ -22,8 +25,9 @@ def read_all():
             f_engy.close()
             f_f0.close()
             assert len(engy) == len(f0)
-            dataset.append(Datum(engy=engy, f0=f0, length=len(engy),
-                                 pinyin=pinyin, tone=tone))
+            dataset.append(Datum(engy=engy, f0=f0,
+                                 slope_num=None, slope_engy=None, slope_f0=None,
+                                 length=len(engy), pinyin=pinyin, tone=tone))
 
     def _read_one(dirname):
         dataset = []
@@ -78,3 +82,18 @@ def fix_length(datasets, length, f):
         for i, datum in enumerate(dataset):
             dataset[i] = datum._replace(engy=_fix_length(datum.engy),
                                         f0=_fix_length(datum.f0))
+
+
+def calc_segmented_slope(datasets, n):
+    def _slope(xs):
+        k, b = np.polyfit(np.arange(len(xs)), xs, 1)
+        return k
+
+    for dataset in datasets.itervalues():
+        for i, datum in enumerate(dataset):
+            slope_engy = map(_slope, np.array_split(datum.engy, n))
+            slope_f0 = map(_slope, np.array_split(datum.f0, n))
+            dataset[i] = datum._replace(slope_engy=slope_engy,
+                                        slope_f0=slope_f0,
+                                        slope_num=n)
+

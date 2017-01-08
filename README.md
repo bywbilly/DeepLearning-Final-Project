@@ -7,8 +7,8 @@ Do a toy Tone Classification in Tensorflow, Thenao and Mxnet
 cd src
 
 # single run
-python Tensorflow_Tone.py
+python model_fc_tensorflow.py
 
 # grid search
-python Tensorflow_Tone.py grid | tee ../out/grid.log
+python model_fc_tensorflow.py grid | tee ../out/grid.log
 ```

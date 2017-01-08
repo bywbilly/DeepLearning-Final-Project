@@ -10,19 +10,22 @@ from pprint import pprint
 
 class Tone_Classification():
     def __init__(self, data, args, verbose=True):
-        self.input_dim = args['input_dim']
         self.hidden_dim = args['hidden_dim']
         self.batch_size = args['batch_size']
+        self.input_dim = (args['num_wavepoint'] + args['num_slope']) * 2
         self.args = args
         self.out = sys.stdout if verbose else open(os.devnull, 'w')
         data_process.shuffle(data)
         data_process.strip_zeros(data, 0.05)
-        data_process.fix_length(data, self.input_dim//2, np.max)
+        data_process.calc_segmented_slope(data, args['num_slope'])
+        data_process.fix_length(data, args['num_wavepoint'], np.max)
         self.data_xs, self.data_ys = {}, {}
         for k, v in data.iteritems():
             xs, ys = [], []
             for datum in v:
-                xs.append(datum.engy + datum.f0)
+                concated = datum.engy + datum.f0 + datum.slope_engy + datum.slope_f0
+                assert len(concated) == self.input_dim
+                xs.append(concated)
                 ys.append(datum.tone)
             self.data_xs[k] = np.array(xs, np.float32)
             self.data_ys[k] = np.array(ys, np.int32) - 1
@@ -144,7 +147,7 @@ class Tone_Classification():
         lr = self.args['init_lr']
         last_err = 100
         cnt_hang = 0
-        for epoch in xrange(20):
+        for epoch in xrange(self.args['num_epoch']):
             n_train_batch = 0
             batch_size = self.args['batch_size']
             if epoch % 4 == 0:
@@ -185,11 +188,13 @@ def run_single():
     import tensorflow as tf
     import nnutils_tensorflow as tfnnutils
     args = {
-        'input_dim': 12,
-        'hidden_dim': [12, 12, 4],
+        'num_wavepoint': 6,
+        'num_slope': 3,
+        'hidden_dim': [30, 15, 4],
+        'num_epoch': 20,
         'batch_size': 2,
         'optimizer': 'sgd',
-        'init_lr': 0.0016,
+        'init_lr': 0.002,
         'use_L2': True,
         'use_L1': False,
         'L2_reg': 0.005,
@@ -198,10 +203,14 @@ def run_single():
     data = data_process.read_all()
     model = Tone_Classification(data, args)
     model.build_model()
-    while not model.train():
-        model.sess.run(tf.global_variables_initializer())
-        print '\033[7mhung... auto restart...\033[0m'
-    model.evaluate('test_new')
+    while True:
+        ok = model.train()
+        model.evaluate('test_new')
+        if not ok:
+            model.sess.run(tf.global_variables_initializer())
+            print '\033[7mhung... auto restart...\033[0m'
+        else:
+            break
 
 
 def _grid_search_init():
