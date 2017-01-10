@@ -1,7 +1,9 @@
 from __future__ import division
 import os
+import sys
 import numpy as np
 import collections
+from scipy.interpolate import CubicSpline
 from python_speech_features import mfcc
 #from python_speech_features import delta
 from python_speech_features import logfbank
@@ -23,8 +25,8 @@ def read_all():
             tone = int(pinyin_with_tone[-1])
             f_engy = open(os.path.join(dirname, name))
             f_f0 = open(os.path.join(dirname, basename + '.f0'))
-            engy = map(float, f_engy.readlines())
-            f0 = map(float, f_f0.readlines())
+            engy = np.array(map(float, f_engy.readlines()))
+            f0 = np.array(map(float, f_f0.readlines()))
             f_engy.close()
             f_f0.close()
             assert len(engy) == len(f0)
@@ -71,6 +73,17 @@ def strip_zeros(datasets, epsilon=0.01):
                                         f0=datum.f0[st:ed+1])
 
 
+def strip_zeros_by_energy(datasets, epsilon=0.01):
+    for dataset in datasets.itervalues():
+        for i, datum in enumerate(dataset):
+            absed = np.abs(datum.engy)
+            eps = np.max(absed) * epsilon
+            idx = absed > eps
+            dataset[i] = datum._replace(engy=datum.engy[idx],
+                                        f0=datum.f0[idx],
+                                        length=np.sum(idx))
+
+
 def fix_length(datasets, length, f):
     def _fix_length(data):
         d = []
@@ -85,6 +98,17 @@ def fix_length(datasets, length, f):
         for i, datum in enumerate(dataset):
             dataset[i] = datum._replace(engy=_fix_length(datum.engy),
                                         f0=_fix_length(datum.f0))
+
+
+def fix_length_by_interpolatation(datasets, length):
+    for dataset in datasets.itervalues():
+        for i, datum in enumerate(dataset):
+            xs = np.linspace(0, 1, datum.length)
+            ip_engy = CubicSpline(xs, datum.engy)
+            ip_f0 = CubicSpline(xs, datum.f0)
+            xs = np.linspace(0, 1, length)
+            dataset[i] = datum._replace(engy=ip_engy(xs),
+                                        f0=ip_f0(xs))
 
 
 def calc_segmented_slope(datasets, n):

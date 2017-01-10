@@ -18,16 +18,17 @@ class Tone_Classification():
         self.batch_size = args['batch_size']
         #self.input_dim = (args['num_wavepoint'] * 2 + args['num_slope']) 
         #self.input_dim = 13 + args['num_wavepoint'] * 2
-        self.input_dim = 13 + args['num_wavepoint']
+        self.input_dim = args['num_wavepoint']
         #self.input_dim = args['num_wavepoint']
         self.args = args
         self.out = sys.stdout if verbose else open(os.devnull, 'w')
         data_process.shuffle(data)
-        #data_process.strip_zeros(data, 0.05)
+        # data_process.strip_zeros(data, 0.05)
+        data_process.strip_zeros_by_energy(data, 0.12)
         if args['num_slope']:
             data_process.calc_segmented_slope(data, args['num_slope'])
         if args['num_wavepoint']:
-            data_process.fix_length(data, args['num_wavepoint'], np.max)
+            data_process.fix_length_by_interpolatation(data, args['num_wavepoint'])
         self.data_xs, self.data_ys = {}, {}
         for k, v in data.iteritems():
             xs, ys = [], []
@@ -44,7 +45,7 @@ class Tone_Classification():
                 else:
                     concated = datum.f0 
                 #assert len(concated) == self.input_dim
-                xs.append(concated + list(mfcc(np.array(datum.engy))[0]))
+                xs.append(concated)
                 #xs.append(concated) 
                 ys.append(datum.tone)
                 #dat = []
@@ -77,15 +78,16 @@ class Tone_Classification():
     def _forward(self, batch_x):
         layers = []
         dims = [self.input_dim] + self.hidden_dim
-        layers.append(tfnnutils.Conv2D('conv1', (1, 10, 1, 108)))
-        layers.append(tfnnutils.Conv2D('conv2', (1, 10, 108, 108)))
+        layers.append(tfnnutils.Conv2D('conv1', (1, 10, 1, 64)))
+        layers.append(tfnnutils.Conv2D('conv2', (1, 10, 64, 128)))
+        layers.append(tfnnutils.Conv2D('conv3', (1, 10, 128, 256)))
         layers.append(tfnnutils.MaxPool())
-        layers.append(tfnnutils.Conv2D('conv3', (1, 2, 108, 1)))
+        # layers.append(tfnnutils.Conv2D('conv3', (1, 10, 108, 1)))
         #layers.append(tfnnutils.Conv2D('conv4', (1, 10, 48, 1)))
         layers.append(tfnnutils.Flatten())
         for i in xrange(len(self.hidden_dim)):
             if i == 0:
-                layers.append(tfnnutils.FCLayer('FC%d'%(i+1), dims[i] / 2, dims[i+1], act=tf.nn.relu))
+                layers.append(tfnnutils.FCLayer('FC%d'%(i+1), 12800, dims[i+1], act=tf.nn.relu))
             else:
                 layers.append(tfnnutils.FCLayer('FC%d'%(i+1), dims[i], dims[i+1], act=tf.nn.relu))
 
@@ -241,13 +243,13 @@ def run_single():
     import tensorflow as tf
     import nnutils_tensorflow as tfnnutils
     args = {
-        'num_wavepoint': 16,
+        'num_wavepoint': 100,
         'num_slope': 0,
-        'hidden_dim': [30, 15, 4],
+        'hidden_dim': [30, 1024, 50, 4],
         'num_epoch': 100,
         'batch_size': 10,
         'optimizer': 'adam',
-        'init_lr': 0.001,
+        'init_lr': 0.01,
         'use_L2': True,
         'use_L1': False,
         'L2_reg': 0.005,
