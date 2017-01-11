@@ -4,16 +4,29 @@ import itertools
 import os
 import sys
 import time
+import datetime
 import multiprocessing
 import data_process
+import StringIO
 from pprint import pprint
 from python_speech_features import mfcc
 #from python_speech_features import delta
 from python_speech_features import logfbank
 
+lio = StringIO.StringIO()
+
+def strnow():
+    return datetime.datetime.now().strftime('%Y-%m-%d %H_%M_%S')
+
+def safe_tofloat(s, default=.0):
+    try:
+        return float(s)
+    except:
+        return default
 
 class Tone_Classification():
     def __init__(self, data, args, verbose=True):
+        pprint(args, stream=lio)
         self.hidden_dim = args['hidden_dim']
         self.batch_size = args['batch_size']
         #self.input_dim = (args['num_wavepoint'] * 2 + args['num_slope']) 
@@ -24,7 +37,7 @@ class Tone_Classification():
         self.out = sys.stdout if verbose else open(os.devnull, 'w')
         data_process.shuffle(data)
         # data_process.strip_zeros(data, 0.05)
-        data_process.strip_zeros_by_energy(data, 0.12)
+        data_process.strip_zeros_by_energy(data, 0.15)
         if args['num_slope']:
             data_process.calc_segmented_slope(data, args['num_slope'])
         if args['num_wavepoint']:
@@ -43,7 +56,7 @@ class Tone_Classification():
                     concated = slope_engy 
                     #concated = engy + f0 + slope_f0
                 else:
-                    concated = datum.f0 
+                    concated = datum.f0
                 #assert len(concated) == self.input_dim
                 xs.append(concated)
                 #xs.append(concated) 
@@ -77,28 +90,30 @@ class Tone_Classification():
 
     def _forward(self, batch_x):
         layers = []
-        dims = [self.input_dim] + self.hidden_dim
-        layers.append(tfnnutils.Conv2D('conv1', (1, 10, 1, 64)))
-        layers.append(tfnnutils.Conv2D('conv2', (1, 10, 64, 128)))
-        layers.append(tfnnutils.Conv2D('conv3', (1, 10, 128, 256)))
-        layers.append(tfnnutils.MaxPool())
-        # layers.append(tfnnutils.Conv2D('conv3', (1, 10, 108, 1)))
-        #layers.append(tfnnutils.Conv2D('conv4', (1, 10, 48, 1)))
+        dims = self.hidden_dim
+        layers.append(tfnnutils.InputLayer())
+        layers.append(tfnnutils.Conv2D('conv1', ksize=(1, 5), kernels=6))
+        layers.append(tfnnutils.MaxPool(ksize=(1, 2)))
+        layers.append(tfnnutils.Conv2D('conv2', ksize=(1, 5), kernels=16))
+        layers.append(tfnnutils.MaxPool(ksize=(1, 2)))
         layers.append(tfnnutils.Flatten())
         for i in xrange(len(self.hidden_dim)):
-            if i == 0:
-                layers.append(tfnnutils.FCLayer('FC%d'%(i+1), 12800, dims[i+1], act=tf.nn.relu))
-            else:
-                layers.append(tfnnutils.FCLayer('FC%d'%(i+1), dims[i], dims[i+1], act=tf.nn.relu))
+            layers.append(tfnnutils.FCLayer('FC%d'%(i+1), dims[i], act=tf.nn.relu))
+            if self.args['dropout'] < 1:
+                layers.append(tfnnutils.Dropout())
 
 
         L1_loss, L2_loss = 0., 0.
-        for layer in layers:
+        last_layer = None
+        for i, layer in enumerate(layers):
             if hasattr(layer, 'L2_Loss'):
                 L2_loss += layer.L2_Loss
             elif hasattr(layer, 'L1_Loss'):
                 L1_loss += layer.L1_Loss
-            batch_x = layer.forward(batch_x)
+            batch_x = layer.forward(last_layer, batch_x)
+            last_layer = layer
+            print >> self.out, layer
+            print >> lio, layer
             #print >> self.out, batch_x
         
         pred = tf.nn.softmax(batch_x)
@@ -148,10 +163,6 @@ class Tone_Classification():
         self.pred_step = pred
         self.loss_step = loss
 
-    def predict(self, batch_x):
-        feed = {self._x: batch_x}
-        return self.sess.run(self.pred_step, feed_dict=feed)
-
     def get_batch(self, dataset, index):
         data_xs = self.data_xs[dataset]
         data_ys = self.data_ys[dataset]
@@ -178,6 +189,8 @@ class Tone_Classification():
             if prepared_x is None:
                 break
             feed = {self._x: prepared_x, self._y: prepared_y}
+            if self.args['dropout'] < 1:
+                feed[tfnnutils.Dropout.pkeep] = 1.
             loss, preds = self.sess.run([self.loss_step, self.pred_step], feed_dict=feed)
             total_loss += np.mean(loss)
             for i in range(len(preds)):
@@ -188,46 +201,47 @@ class Tone_Classification():
         loss = total_loss / n_batch
         err = total_err / (n_batch * batch_size)
         print >> self.out, 'evaluate %s: loss = %f err = \033[1;31m%f\033[0m' % (dataset, loss, err)
+        print >> lio, 'evaluate %s: loss = %f err = %f' % (dataset, loss, err)
         return err
 
-    def train(self, stop_if_hang=True):
+    def train(self):
+        global persistent_best_acc
         lr = self.args['init_lr']
-        last_err = 100
-        cnt_hang = 0
         best_acc = 0.0
         for epoch in xrange(self.args['num_epoch']):
             n_train_batch = 0
             batch_size = self.args['batch_size']
-            #if epoch % 4 == 0:
-            #    lr /= 2.0 
+            lr *= self.args['lr_decay']
             print >> self.out, '\033[1;36mThe epoch %d training: \033[0m' % epoch
+            print >> lio, 'The epoch %d training: ' % epoch
             while True:
                 prepared_x, prepared_y = self.get_batch('train', n_train_batch)
                 if prepared_x is None:
                     break
                 # print >> self.out, prepared_y
                 feed = {self.lr: lr, self._x: prepared_x, self._y: prepared_y}
+                if self.args['dropout'] < 1:
+                    feed[tfnnutils.Dropout.pkeep] = self.args['dropout']
                 _, loss = self.sess.run([self.train_step, self.loss_step], feed_dict=feed)
                 if n_train_batch % 100 == 0:
                     print >> self.out, 'The iteration is %d train loss is: %f' % (n_train_batch, loss)
+                    print >> lio, 'The iteration is %d train loss is: %f' % (n_train_batch, loss)
                 if n_train_batch % 200 == 0:
                     err = self.evaluate('test')
-                    if abs(err - last_err) < 1e-3:
-                        cnt_hang += 1
-                        if cnt_hang >= 4 and stop_if_hang:
-                            pass
-                            #return False
-                    else:
-                        cnt_hang = 0
-                        last_err = err
                 n_train_batch += 1
             acc = 1.0 - self.evaluate('test_new')
             if acc > best_acc:
                 best_acc = acc
+            if acc > persistent_best_acc:
+                persistent_best_acc = acc
+                dirname = '../out/%.6f %s' % (acc, strnow())
+                self.save(dirname)
+                with open(os.path.join(dirname, 'params.log'), 'w') as f:
+                    f.write(lio.getvalue())
 
         print "miaomiaomiao"   
         print best_acc
-        return True
+        return best_acc
 
     def save(self, dirname):
         try:
@@ -239,34 +253,41 @@ class Tone_Classification():
 
 
 def run_single():
-    global tf, tfnnutils
+    global tf, tfnnutils, persistent_best_acc
     import tensorflow as tf
     import nnutils_tensorflow as tfnnutils
     args = {
         'num_wavepoint': 100,
         'num_slope': 0,
-        'hidden_dim': [30, 1024, 50, 4],
-        'num_epoch': 100,
-        'batch_size': 10,
-        'optimizer': 'adam',
-        'init_lr': 0.01,
+        'lr_decay': 0.99,
+        'dropout': 0.75,
+        'hidden_dim': [128, 42, 4],
+        'num_epoch': 200,
+        'batch_size': 4,
+        'optimizer': 'sgd',
+        'init_lr': 0.0005,
         'use_L2': True,
         'use_L1': False,
         'L2_reg': 0.005,
         'L1_reg': 0.0005,
     }
+    try:
+        acc = map(lambda s: safe_tofloat(s.split()[0]), os.listdir('../out'))
+        acc.sort()
+        persistent_best_acc = acc[-1]
+    except:
+        persistent_best_acc = 0
+    print 'persistent_best_acc', persistent_best_acc
     data = data_process.read_all()
     model = Tone_Classification(data, args)
     model.build_model()
-    while True:
-        ok = model.train()
-        model.evaluate('test_new')
-        if not ok:
-            #model.sess.run(tf.global_variables_initializer())
-            model.sess.run(tf.initialize_all_variables())
-            print '\033[7mhung... auto restart...\033[0m'
-        else:
-            break
+    acc = model.train()
+    print >> lio, 'best acc', acc
+
+    if not os.path.exists('../lio'):
+        os.mkdir('../lio')
+    with open('../lio/%.6f %s.log' % (acc, strnow()), 'w') as f:
+        f.write(lio.getvalue())
 
 
 def _grid_search_init():

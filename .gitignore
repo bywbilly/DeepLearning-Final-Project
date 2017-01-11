@@ -1,5 +1,6 @@
 log
 out/
+lio/
 
 # Created by https://www.gitignore.io/api/python,vim,macos
 
