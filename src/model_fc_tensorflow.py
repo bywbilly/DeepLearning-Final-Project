@@ -27,21 +27,23 @@ def safe_tofloat(s, default=.0):
 class Tone_Classification():
     def __init__(self, data, args, verbose=True):
         pprint(args, stream=lio)
-        self.hidden_dim = args['hidden_dim']
+        self.hidden_dim = args['hidden_dim'] 
         self.batch_size = args['batch_size']
         #self.input_dim = (args['num_wavepoint'] * 2 + args['num_slope']) 
         #self.input_dim = 13 + args['num_wavepoint'] * 2
-        self.input_dim = args['num_wavepoint']
+        self.input_dim = args['num_wavepoint'] + args['mfcc']
         #self.input_dim = args['num_wavepoint']
         self.args = args
         self.out = sys.stdout if verbose else open(os.devnull, 'w')
-        data_process.shuffle(data)
         # data_process.strip_zeros(data, 0.05)
+        #data_process.low_pass_filter(data)
         data_process.strip_zeros_by_energy(data, 0.15)
+        #data_process.data_augmentation(data)
         if args['num_slope']:
             data_process.calc_segmented_slope(data, args['num_slope'])
         if args['num_wavepoint']:
-            data_process.fix_length_by_interpolatation(data, args['num_wavepoint'])
+            data_process.fix_length_by_interpolatation(data, args['num_wavepoint'], args['num_mfcc'])
+        data_process.shuffle(data)
         self.data_xs, self.data_ys = {}, {}
         for k, v in data.iteritems():
             xs, ys = [], []
@@ -56,7 +58,10 @@ class Tone_Classification():
                     concated = slope_engy 
                     #concated = engy + f0 + slope_f0
                 else:
-                    concated = datum.f0
+                    if not args['mfcc']:
+                        concated = datum.f0 
+                    else: 
+                        concated = np.hstack((datum.f0, mfcc(np.array(datum.engy), args['rate'], numcep = args['mfcc'])[0]))
                 #assert len(concated) == self.input_dim
                 xs.append(concated)
                 #xs.append(concated) 
@@ -92,15 +97,22 @@ class Tone_Classification():
         layers = []
         dims = self.hidden_dim
         layers.append(tfnnutils.InputLayer())
-        layers.append(tfnnutils.Conv2D('conv1', ksize=(1, 5), kernels=6))
+        layers.append(tfnnutils.Conv2D('conv1', ksize=(1, 10), kernels=96))
         layers.append(tfnnutils.MaxPool(ksize=(1, 2)))
-        layers.append(tfnnutils.Conv2D('conv2', ksize=(1, 5), kernels=16))
+        layers.append(tfnnutils.Conv2D('conv2', ksize=(1, 10), kernels=108))
         layers.append(tfnnutils.MaxPool(ksize=(1, 2)))
+        layers.append(tfnnutils.Conv2D('conv3', ksize=(1, 10), kernels=108))
+        layers.append(tfnnutils.MaxPool(ksize=(1, 2)))
+        layers.append(tfnnutils.Conv2D('conv4', ksize=(1, 10), kernels=16))
         layers.append(tfnnutils.Flatten())
         for i in xrange(len(self.hidden_dim)):
-            layers.append(tfnnutils.FCLayer('FC%d'%(i+1), dims[i], act=tf.nn.relu))
-            if self.args['dropout'] < 1:
+            if i == len(self.hidden_dim) - 1:
+                layers.append(tfnnutils.FCLayer('FC%d'%(i+1), dims[i], act=None))
+            else:
+                layers.append(tfnnutils.FCLayer('FC%d'%(i+1), dims[i], act=tf.nn.relu))
+            if i == 0 and self.args['dropout'] < 1:
                 layers.append(tfnnutils.Dropout())
+
 
 
         L1_loss, L2_loss = 0., 0.
@@ -202,12 +214,13 @@ class Tone_Classification():
         err = total_err / (n_batch * batch_size)
         print >> self.out, 'evaluate %s: loss = %f err = \033[1;31m%f\033[0m' % (dataset, loss, err)
         print >> lio, 'evaluate %s: loss = %f err = %f' % (dataset, loss, err)
-        return err
+        return loss, err
 
     def train(self):
         global persistent_best_acc
         lr = self.args['init_lr']
         best_acc = 0.0
+        val_loss_list = []
         for epoch in xrange(self.args['num_epoch']):
             n_train_batch = 0
             batch_size = self.args['batch_size']
@@ -227,9 +240,11 @@ class Tone_Classification():
                     print >> self.out, 'The iteration is %d train loss is: %f' % (n_train_batch, loss)
                     print >> lio, 'The iteration is %d train loss is: %f' % (n_train_batch, loss)
                 if n_train_batch % 200 == 0:
-                    err = self.evaluate('test')
+                    loss, err = self.evaluate('test')
+                    val_loss_list.append(loss)
                 n_train_batch += 1
-            acc = 1.0 - self.evaluate('test_new')
+            _, acc = self.evaluate('test_new')
+            acc = 1 - acc
             if acc > best_acc:
                 best_acc = acc
             if acc > persistent_best_acc:
@@ -239,6 +254,9 @@ class Tone_Classification():
                 with open(os.path.join(dirname, 'params.log'), 'w') as f:
                     f.write(lio.getvalue())
 
+        with open('../doc/val_loss_tf.csv', 'w') as f:
+            for epoch, loss in zip(xrange(self.args['num_epoch']), val_loss_list):
+                f.write('%.16f,%.16f\n' % (epoch, loss))
         print "miaomiaomiao"   
         print best_acc
         return best_acc
@@ -258,17 +276,20 @@ def run_single():
     import nnutils_tensorflow as tfnnutils
     args = {
         'num_wavepoint': 100,
+        'mfcc': 6,
+        'rate': 70,
+        'num_mfcc': 1000,
         'num_slope': 0,
-        'lr_decay': 0.99,
-        'dropout': 0.75,
-        'hidden_dim': [128, 42, 4],
+        'lr_decay': 1.0,
+        'dropout': 0.5,
+        'hidden_dim': [128, 80, 4],
         'num_epoch': 200,
         'batch_size': 4,
-        'optimizer': 'sgd',
-        'init_lr': 0.0005,
+        'optimizer': 'adam',
+        'init_lr': 0.001,
         'use_L2': True,
         'use_L1': False,
-        'L2_reg': 0.005,
+        'L2_reg': 0.0005,
         'L1_reg': 0.0005,
     }
     try:
@@ -290,81 +311,5 @@ def run_single():
         f.write(lio.getvalue())
 
 
-def _grid_search_init():
-    global alldata, best_err, tf, tfnnutils
-    import tensorflow as tf
-    import nnutils_tensorflow as tfnnutils
-    alldata = data_process.read_all()
-    best_err = 1e2
-
-def _grid_search_worker(args):
-    global alldata, best_err
-    err, path = 1e2, None
-    for i in xrange(3):
-        data = copy.deepcopy(alldata)
-        tf.reset_default_graph()
-        model = Tone_Classification(data, args, verbose=False)
-        model.build_model()
-        model.train(stop_if_hang=False)
-        now_err = model.evaluate('test_new')
-        err = min(err, now_err)
-        if now_err < best_err:
-            best_err = now_err
-            path = model.save('../out/%.6f' % err)
-    return args, err, path
-
-def run_grid_search(num_worker):
-    g_input_dim = [8, 12, 30]
-    g_dims = [2, 3]
-    g_dim_size = [10, 20, 40, 80]
-    g_batch_size = [1, 2, 4, 8]
-    g_optimizer = ['sgd', 'adam']
-    g_lr = [0.0008, 0.0016, 0.0064]
-    g_l2 = [0, 0.005]
-
-    tasks = []
-    for input_dim, dims, batch_size, optimizer, lr, l2 in itertools.product(g_input_dim, g_dims, g_batch_size, g_optimizer, g_lr, g_l2):
-        for hidden_dim in itertools.product(*itertools.repeat(g_dim_size, dims)):
-            tasks.append({
-                'input_dim': input_dim,
-                'hidden_dim': list(hidden_dim),
-                'batch_size': batch_size,
-                'optimizer': optimizer,
-                'init_lr': lr,
-                'use_L2': bool(l2),
-                'use_L1': False,
-                'L2_reg': l2,
-                'L1_reg': .0
-            })
-
-    pool = multiprocessing.Pool(processes=num_worker, initializer=_grid_search_init)
-    best = 1e2
-    st = time.time()
-    try:
-        for done, (args, err, path) in enumerate(pool.imap_unordered(_grid_search_worker, tasks), start=1):
-            dur = time.time() - st
-            rhh, rmm, rss = dur // 3600, dur // 60 % 60, dur % 60
-            dur = (len(tasks) - done) * dur / done
-            ehh, emm, ess = dur // 3600, dur // 60 % 60, dur % 60
-            sys.stderr.write('done %d/%d   %dh%02dm%02ds elapsed   %dh%02dm%02ds eta\n' % (done, len(tasks), rhh, rmm, rss, ehh, emm, ess))
-            sys.stderr.flush()
-            if err < best:
-                best = err
-                print 'new best!', 'err', err, 'saved at ', path
-            str = ['err', repr(err)]
-            for k in sorted(args.iterkeys()):
-                str.append(k)
-                str.append(repr(args[k]))
-            print ' '.join(str)
-            sys.stdout.flush()
-    except KeyboardInterrupt:
-        pool.terminate()
-        pool.join()
-        raise
-
-
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == 'grid':
-        run_grid_search(int(sys.argv[2]))
-    else:
-        run_single()
+    run_single()

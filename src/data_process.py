@@ -7,6 +7,7 @@ from scipy.interpolate import CubicSpline
 from python_speech_features import mfcc
 #from python_speech_features import delta
 from python_speech_features import logfbank
+from scipy import signal
 
 Datum = collections.namedtuple('Datum', [
     'engy', 'f0',
@@ -100,15 +101,40 @@ def fix_length(datasets, length, f):
                                         f0=_fix_length(datum.f0))
 
 
-def fix_length_by_interpolatation(datasets, length):
+def fix_length_by_interpolatation(datasets, length, mfcc_len):
     for dataset in datasets.itervalues():
         for i, datum in enumerate(dataset):
             xs = np.linspace(0, 1, datum.length)
             ip_engy = CubicSpline(xs, datum.engy)
             ip_f0 = CubicSpline(xs, datum.f0)
             xs = np.linspace(0, 1, length)
-            dataset[i] = datum._replace(engy=ip_engy(xs),
+            xs_mfcc = np.linspace(0, 1, mfcc_len)
+            dataset[i] = datum._replace(engy=ip_engy(xs_mfcc),
                                         f0=ip_f0(xs))
+
+def fix_length_by_interpolatation_engy(datasets, length):
+    for dataset in datasets.itervalues():
+        for i, datum in enumerate(dataset):
+            xs = np.linspace(0, 1, datum.length)
+            ip_engy = CubicSpline(xs, datum.engy)
+            xs = np.linspace(0, 1, length)
+            dataset[i] = datum._replace(engy=ip_engy(xs),
+                                        )
+def data_augmentation(datasets, key = 'train'):
+    new = []
+    for i, datum in enumerate(datasets[key]):
+        new.append(datum)
+        new.append(datum._replace(engy=datum.engy + np.random.normal(size = datum.engy.shape)))
+
+    datasets[key] = new
+
+def low_pass_filter(datasets):
+    for dataset in datasets.itervalues():
+        for i, datum in enumerate(dataset):
+            b, a = signal.butter(5, 0.1)
+            #dataset[i] = datum._replace(engy = signal.filtfilt(b, a, datum.engy))
+            dataset[i] = datum._replace(engy = signal.lfilter(b, a, datum.engy))
+        
 
 
 def calc_segmented_slope(datasets, n):

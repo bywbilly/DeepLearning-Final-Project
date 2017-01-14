@@ -32,17 +32,19 @@ class Tone_Classification():
         self.batch_size = args['batch_size']
         #self.input_dim = (args['num_wavepoint'] * 2 + args['num_slope']) 
         #self.input_dim = 13 + args['num_wavepoint'] * 2
-        self.input_dim = args['num_wavepoint']
+        self.input_dim = args['num_wavepoint'] + args['mfcc']
         #self.input_dim = args['num_wavepoint']
         self.args = args
         self.out = sys.stdout if verbose else open(os.devnull, 'w')
-        data_process.shuffle(data)
         # data_process.strip_zeros(data, 0.05)
+        #data_process.low_pass_filter(data)
         data_process.strip_zeros_by_energy(data, 0.15)
+        #data_process.data_augmentation(data)
         if args['num_slope']:
             data_process.calc_segmented_slope(data, args['num_slope'])
         if args['num_wavepoint']:
-            data_process.fix_length_by_interpolatation(data, args['num_wavepoint'])
+            data_process.fix_length_by_interpolatation(data, args['num_wavepoint'], args['num_mfcc'])
+        data_process.shuffle(data)
         self.data_xs, self.data_ys = {}, {}
         for k, v in data.iteritems():
             xs, ys = [], []
@@ -57,7 +59,10 @@ class Tone_Classification():
                     concated = slope_engy 
                     #concated = engy + f0 + slope_f0
                 else:
-                    concated = datum.f0
+                    if not args['mfcc']:
+                        concated = datum.f0 
+                    else: 
+                        concated = np.hstack((datum.f0, mfcc(np.array(datum.engy), args['rate'], numcep = args['mfcc'])[0]))
                 #assert len(concated) == self.input_dim
                 xs.append(concated)
                 #xs.append(concated) 
@@ -101,28 +106,56 @@ class Tone_Classification():
         return out
 
     def build_model(self, init_params=None):
+        self.lr = T.scalar()
+        if self.args['optimizer'] == 'sgd':
+            opt = nnutils.SGDOptimizer(lr=self.lr)
+        elif self.args['optimizer'] == 'adam':
+            opt = nnutils.AdamOptimizer(lr=self.lr)
+        else:
+            raise RuntimeError('unsupported optimizer %s' % self.args['optimizer'])
+
         x = self.x = T.tensor4()
         y = self.y = T.ivector()
         self.layers = layers = []
+        dim = self.input_dim
         layers.append(nnutils.Conv2D(
-            input_shape=(self.batch_size, 1, self.input_dim, 1),
-            filter_shape=(6, 1, 5, 1),
+            input_shape=(self.batch_size, 1, dim, 1),
+            filter_shape=(96, 1, 11, 1),
             act=nnutils.ReLU,
-            zeropad=0
+            zeropad=(5, 0)
         ))
         layers.append(nnutils.MaxPool2D(pool_shape=(2, 1)))
+        dim = dim // 2
         layers.append(nnutils.Conv2D(
-            input_shape=(self.batch_size, 1, (self.input_dim - 4) // 2, 1),
-            filter_shape=(16, 6, 5, 1),
+            input_shape=(self.batch_size, 1, dim, 1),
+            filter_shape=(108, 96, 11, 1),
             act=nnutils.ReLU,
-            zeropad=0
+            zeropad=(5, 0)
         ))
         layers.append(nnutils.MaxPool2D(pool_shape=(2, 1)))
+        dim = dim // 2
+        layers.append(nnutils.Conv2D(
+            input_shape=(self.batch_size, 1, dim, 1),
+            filter_shape=(108, 108, 11, 1),
+            act=nnutils.ReLU,
+            zeropad=(5, 0)
+        ))
+        layers.append(nnutils.MaxPool2D(pool_shape=(2, 1)))
+        dim = dim // 2
+        layers.append(nnutils.Conv2D(
+            input_shape=(self.batch_size, 1, dim, 1),
+            filter_shape=(16, 108, 11, 1),
+            act=nnutils.ReLU,
+            zeropad=(5, 0)
+        ))
         layers.append(nnutils.Flatten(2))
-        first_dim = ((self.input_dim - 4) // 2 - 4) // 2 * 16
-        dims = [first_dim] + self.hidden_dim
+        dims = [dim * 16] + self.hidden_dim
         for i in xrange(len(self.hidden_dim)-1):
-            layers.append(nnutils.FCLayer(dims[i], dims[i+1], act=nnutils.ReLU))
+            layers.append(nnutils.FCLayer(dims[i], dims[i+1],
+                                          act=nnutils.ReLU if i != len(self.hidden_dim)-2 else nnutils.linear))
+            if i == 0 and self.args['dropout'] < 1:
+                layers.append(nnutils.Dropout(self.args['dropout']))
+        nnutils.Dropout.set_dropout_on(training=True)
 
         if init_params is not None:
             self.set_params(layers, init_params)
@@ -142,11 +175,9 @@ class Tone_Classification():
         elif self.args['use_L1']:
             self.loss += self.args['L1_reg'] * L1_loss
 
-        self.lr = T.scalar()
         self.lparams = self.get_params(self.layers)
         self.params = self.flatten(self.lparams)
-        grads = T.grad(self.loss, self.params)
-        updates = [(param_i, param_i - self.lr * grad_i) for param_i, grad_i in zip(self.params, grads)]
+        grads, updates = opt(self.loss, self.params)
         self.train_func = theano.function(
             inputs = [self.x, self.y, self.lr],
             outputs = [self.loss],
@@ -177,6 +208,7 @@ class Tone_Classification():
         total_err = 0.
         n_batch = 0
         now_pos = 0
+        nnutils.Dropout.set_dropout_on(training=False)
         while True:
             prepared_x, prepared_y = self.get_batch(dataset, n_batch)
             #print >> self.out, prepared_x, prepared_y
@@ -192,12 +224,14 @@ class Tone_Classification():
         loss = total_loss / n_batch
         err = total_err / (n_batch * batch_size)
         print >> self.out, 'evaluate %s: loss = %f err = \033[1;31m%f\033[0m' % (dataset, loss, err)
-        return err
+        nnutils.Dropout.set_dropout_on(training=True)
+        return loss, err
 
     def train(self, stop_if_hang=True):
         lr = self.args['init_lr']
         best_acc = 0
 
+        val_loss_list = []
         for epoch in xrange(self.args['num_epoch']):
             n_train_batch = 0
             batch_size = self.args['batch_size']
@@ -214,10 +248,16 @@ class Tone_Classification():
                     # for param in self.params:
                     #     print >> self.out, param.get_value()
                 if n_train_batch % 200 == 0:
-                    err = self.evaluate('test')
+                    loss, err = self.evaluate('test')
+                    val_loss_list.append(loss)
                 n_train_batch += 1
-            acc = 1 - self.evaluate('test_new')
+            loss, err = self.evaluate('test_new')
+            acc = 1-err
             best_acc = max(best_acc, acc)
+
+        with open('../doc/val_loss_theano.csv', 'w') as f:
+            for epoch, loss in zip(xrange(self.args['num_epoch']), val_loss_list):
+                f.write('%.16f,%.16f\n' % (epoch, loss))
         print 'best acc', best_acc
 
     def save(self, dirname):
@@ -231,18 +271,21 @@ def run_single():
     import theano.tensor as T
     import nnutils_theano as nnutils
     args = {
-        'num_wavepoint': 200,
+        'num_wavepoint': 100,
+        'mfcc': 6,
+        'rate': 70,
+        'num_mfcc': 1000,
         'num_slope': 0,
-        'lr_decay': 0.99,
-        'dropout': 1,
-        'hidden_dim': [128, 42, 4],
+        'lr_decay': 1.0,
+        'dropout': 0.5,
+        'hidden_dim': [128, 80, 4],
         'num_epoch': 200,
         'batch_size': 4,
-        'optimizer': 'sgd',
+        'optimizer': 'adam',
         'init_lr': 0.001,
-        'use_L2': False,
+        'use_L2': True,
         'use_L1': False,
-        'L2_reg': 0.005,
+        'L2_reg': 0.0005,
         'L1_reg': 0.0005,
     }
     data = data_process.read_all()
