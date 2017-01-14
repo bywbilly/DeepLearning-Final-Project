@@ -148,7 +148,7 @@ class MaxPool2D(object):
         self.pool_shape = pool_shape
     
     def forward(self, x):
-        return pool.max_pool_2d(input=x, ds=self.pool_shape, ignore_border=True)
+        return pool.pool_2d(input=x, ds=self.pool_shape, ignore_border=True, mode='max')
 
     @property
     def params(self):
