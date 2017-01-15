@@ -1,0 +1,16 @@
+strip_zeros_by_energy(data, 0.15)
+fix_length(data, args['num_wavepoint'], np.max)
+feature: f0 only
+args = {
+    'num_wavepoint': 12,
+    'lr_decay': 1.0,
+    'hidden_dim': [40, 15, 4],
+    'num_epoch': 200,
+    'batch_size': 4,
+    'optimizer': 'sgd',
+    'init_lr': 0.0004,
+    'use_L2': False,
+    'use_L1': False,
+    'L2_reg': 0.0005,
+    'L1_reg': 0.0005,
+}

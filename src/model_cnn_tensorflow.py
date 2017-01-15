@@ -301,8 +301,13 @@ def run_single():
     print 'persistent_best_acc', persistent_best_acc
     data = data_process.read_all()
     model = Tone_Classification(data, args)
+    t1 = time.time()
     model.build_model()
+    t2 = time.time()
     acc = model.train()
+    t3 = time.time()
+    print 'build_model time %.16fs' % (t2 - t1)
+    print 'train %s epoch time %.16fs' % (args['num_epoch'], t3 - t2)
     print >> lio, 'best acc', acc
 
     if not os.path.exists('../lio'):

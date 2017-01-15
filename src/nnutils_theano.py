@@ -191,6 +191,6 @@ def AdamOptimizer(lr=0.001, b1=0.1, b2=0.001, e=1e-8):
 def SGDOptimizer(lr=0.0001):
     def _SGDOptimizer(loss, params):
         grads = T.grad(loss, params)
-        updates = [(param_i, param_i - self.lr * grad_i) for param_i, grad_i in zip(self.params, grads)]
+        updates = [(param_i, param_i - lr * grad_i) for param_i, grad_i in zip(params, grads)]
         return grads, updates
     return _SGDOptimizer
