@@ -52,6 +52,77 @@ def shuffle(datasets):
     for dataset in datasets.itervalues():
         np.random.shuffle(dataset)
 
+def dp_erase_noise(datasets):
+    for dataset in datasets.itervalues():
+        for ii, datum in enumerate(dataset):
+            length = len(datum.f0)
+            #print datum
+            f = [[[[1000000000, [], False] for k in xrange(length + 1)] for j in xrange(length + 1)] for i in xrange(length)]
+            for i in xrange(length):
+                f[i][0][0][0] = 0
+                f[i][0][0][2] = True
+            f[0][1][1][0] = 0
+            f[0][1][1][1] = [0]
+            f[0][1][1][2] = True
+            for i in xrange(0, length - 1):
+                for j in xrange(0, i + 1):
+                    for k in xrange(0, i + 2):
+                        if f[i][j][k][2] == False:
+                            continue
+                        if f[i + 1][j][k][2]:
+                            if f[i][j][k][0] < f[i + 1][j][k][0]:
+                                f[i + 1][j][k][0] = f[i][j][k][0]
+                                f[i + 1][j][k][1] = f[i][j][k][1]
+                        else:
+                            f[i + 1][j][k] = f[i][j][k]
+                            f[i + 1][j][k][2] = True
+                        if f[i + 1][j + 1][i + 1][2]:
+                            pre = datum.f0[i]
+                            if k != 0:
+                                pre = datum.f0[k - 1]
+                            if (f[i + 1][j + 1][i + 1][0] > f[i][j][k][0] + (datum.f0[i] - pre) ** 4 + (i - (k - 1)) ** 2):
+                                f[i + 1][j + 1][i + 1][0] = f[i][j][k][0] + (datum.f0[i] - pre) ** 4 + (i - (k - 1)) ** 2 
+                                f[i + 1][j + 1][i + 1][1] = f[i][j][k][1] + [i]
+                        else:
+                            pre = datum.f0[i]
+                            if k != 0:
+                                pre = datum.f0[k - 1]
+                            f[i + 1][j + 1][i + 1][0] = f[i][j][k][0] + (datum.f0[i] - pre) ** 2 + (i - (k - 1)) ** 1.5
+                            f[i + 1][j + 1][i + 1][1] = f[i][j][k][1] + [i]
+                            f[i + 1][j + 1][i + 1][2] = True
+                        #flucation = (datum.f0[i - 1] - pre) ** 4 + (i - (k - 1)) ** 2
+                        #if f[i - 1][j][k] != 1000000000:
+                        #    f[i][j][k] = f[i - 1][j][k]
+                        #if f[i - 1][j - 1][k][0] + flucation < f[i][j][i][0]:
+                        #    #print i - 1, j - 1
+                        #    #print "mie"
+                        #    f[i][j][i][0] = f[i - 1][j - 1][k][0] + flucation
+                        #    f[i][j][i][1] = f[i - 1][j - 1][k][1] + [i - 1]
+                        #    #print f[i][j][i]
+            index = []
+            Min = 1000000000
+            pos = -1
+            for j in xrange(int(length / 4), length + 1):
+                for k in xrange(1, length + 1):
+                    #print j, k
+                    #print f[length][j][k]
+                    if f[length - 1][j][k][2] and f[length - 1][j][k][0] < Min:
+                        pos = j
+                        #Min = f[length - 1][i][k][0]
+                        Min = f[length - 1][j][k][0]
+                        index = f[length - 1][i][k][1]
+            #print pos, length
+            #print pos - length
+            #print index
+            #assert(len(index) != 0)
+            if len(index) <= 10:
+                index = [i for i in xrange(length)]
+            assert(len(index) >= 3)
+            dataset[ii] = datum._replace(f0=datum.f0[index], engy=datum.engy[index], length=len(index)) 
+
+        print "miaomiaomiao"
+
+
 
 def strip_zeros(datasets, epsilon=0.01):
     def _get_offset(data):
