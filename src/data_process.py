@@ -80,14 +80,16 @@ def dp_erase_noise(datasets):
                             pre = datum.f0[i]
                             if k != 0:
                                 pre = datum.f0[k - 1]
-                            if (f[i + 1][j + 1][i + 1][0] > f[i][j][k][0] + (datum.f0[i] - pre) ** 4 + (i - (k - 1)) ** 2):
-                                f[i + 1][j + 1][i + 1][0] = f[i][j][k][0] + (datum.f0[i] - pre) ** 4 + (i - (k - 1)) ** 2 
+                            flucation = (datum.f0[i - 1] - pre) ** 4 + (i - (k - 1)) ** 2
+                            if f[i + 1][j + 1][i + 1][0] > f[i][j][k][0] + flucation:
+                                f[i + 1][j + 1][i + 1][0] = f[i][j][k][0] + flucation
                                 f[i + 1][j + 1][i + 1][1] = f[i][j][k][1] + [i]
                         else:
                             pre = datum.f0[i]
                             if k != 0:
                                 pre = datum.f0[k - 1]
-                            f[i + 1][j + 1][i + 1][0] = f[i][j][k][0] + (datum.f0[i] - pre) ** 2 + (i - (k - 1)) ** 1.5
+                            flucation = (datum.f0[i - 1] - pre) ** 4 + (i - (k - 1)) ** 2
+                            f[i + 1][j + 1][i + 1][0] = f[i][j][k][0] + flucation
                             f[i + 1][j + 1][i + 1][1] = f[i][j][k][1] + [i]
                             f[i + 1][j + 1][i + 1][2] = True
                         #flucation = (datum.f0[i - 1] - pre) ** 4 + (i - (k - 1)) ** 2
